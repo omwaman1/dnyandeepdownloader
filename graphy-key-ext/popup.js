@@ -94,6 +94,7 @@ document.getElementById('export').addEventListener('click', () => {
             videoId: k.videoId,
             title: k.title,
             section: k.section || '',
+            subSection: k.subSection || '',
             keyHex: k.keyHex,
             ivHex: k.ivHex || '',
             streamUrl: k.streamUrl

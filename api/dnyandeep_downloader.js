@@ -178,6 +178,7 @@ async function downloadVideo(video, index, total) {
   console.log(`\n${"═".repeat(60)}`);
   console.log(`[${index + 1}/${total}] ${title}`);
   if (section) console.log(`  📁 Section: ${section}`);
+  if (video.subSection) console.log(`  📂 SubSection: ${video.subSection}`);
   console.log(`  ID: ${videoId}`);
   console.log(`${"═".repeat(60)}`);
 
@@ -188,7 +189,12 @@ async function downloadVideo(video, index, total) {
 
   const safeTitle = sanitizeFilename(title);
   const safeSection = section ? sanitizeFilename(section) : "";
-  const outDir = safeSection ? path.join(OUTPUT_DIR, safeSection) : OUTPUT_DIR;
+  const safeSubSection = (video.subSection || "") ? sanitizeFilename(video.subSection) : "";
+  
+  // Build nested folder: downloads / section / subSection
+  let outDir = OUTPUT_DIR;
+  if (safeSection) outDir = path.join(outDir, safeSection);
+  if (safeSubSection) outDir = path.join(outDir, safeSubSection);
   fs.mkdirSync(outDir, { recursive: true });
   const outputFile = path.join(outDir, `${safeTitle}.mp4`);
 

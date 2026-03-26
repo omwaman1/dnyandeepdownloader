@@ -45,21 +45,32 @@
                     if (!videoId || capturedIds.has(videoId)) return;
                     capturedIds.add(videoId);
 
-                    // Find title and section from page
+                    // Find title, section, and subSection from page
                     let title = '';
                     let section = '';
+                    let subSection = '';
                     const dataEl = document.querySelector(`[data-id="${videoId}"]`);
                     if (dataEl) {
                         title = dataEl.getAttribute('data-title') || '';
-                        // Build section map by document order: labels appear before their videos
-                        let curSec = '';
-                        const allItems = document.querySelectorAll('[data-type="label"][data-title], [data-type="video"][data-id]');
+                        // Build section+subSection map by document order
+                        let curSec = '', curSub = '';
+                        const allItems = document.querySelectorAll(
+                            '.courseItem[data-type="label"][data-title], .courseSubItem[data-type="label"], [data-type="video"][data-id]'
+                        );
                         for (const item of allItems) {
-                            if (item.getAttribute('data-type') === 'label') {
-                                curSec = item.getAttribute('data-title') || '';
+                            const dt = item.getAttribute('data-type');
+                            if (dt === 'label') {
+                                if (item.classList.contains('courseItem') && item.getAttribute('data-title')) {
+                                    curSec = item.getAttribute('data-title');
+                                    curSub = '';
+                                } else if (item.classList.contains('courseSubItem')) {
+                                    const td = item.querySelector('.title');
+                                    curSub = td ? td.textContent.trim() : '';
+                                }
                             }
                             if (item.getAttribute('data-id') === videoId) {
                                 section = curSec;
+                                subSection = curSub;
                                 break;
                             }
                         }
@@ -74,7 +85,7 @@
                     
                     window.postMessage({ 
                         type: 'GRAPHY_KEY_CAPTURED', 
-                        payload: { videoId, title, section, keyHex, ivHex, streamUrl, timestamp: new Date().toLocaleTimeString() }
+                        payload: { videoId, title, section, subSection, keyHex, ivHex, streamUrl, timestamp: new Date().toLocaleTimeString() }
                     }, '*');
 
                 } catch (err) {
@@ -103,21 +114,47 @@
         }
         const courseId = courseMatch[1];
 
-        // 2. Build section map by scanning all items in document order
-        // Section headers have data-type="label", videos have data-type="video"
-        const allDomItems = document.querySelectorAll('[data-type="label"][data-title], [data-type="video"][data-id]');
+        // 2. Build section + subSection map by scanning all items in document order
+        // Top-level sections: .courseItem[data-type="label"][data-title]
+        // Sub-sections: .courseSubItem[data-type="label"] (title in .title div text)
+        // Videos: [data-type="video"][data-id]
+        const allDomItems = document.querySelectorAll(
+            '.courseItem[data-type="label"][data-title], .courseSubItem[data-type="label"], [data-type="video"][data-id]'
+        );
         let currentSection = '';
+        let currentSubSection = '';
         const allVideos = [];
         
         allDomItems.forEach(el => {
-            if (el.getAttribute('data-type') === 'label') {
-                currentSection = el.getAttribute('data-title') || '';
-                console.log(`[Auto Extract] 📁 Section: ${currentSection}`);
-            } else if (el.getAttribute('data-type') === 'video' && el.getAttribute('data-id')) {
+            const dtype = el.getAttribute('data-type');
+            if (dtype === 'label') {
+                if (el.classList.contains('courseItem') && el.getAttribute('data-title')) {
+                    // Top-level section
+                    currentSection = el.getAttribute('data-title');
+                    currentSubSection = ''; // Reset sub-section when new section starts
+                    console.log(`[Auto Extract] 📁 Section: ${currentSection}`);
+                } else if (el.classList.contains('courseSubItem')) {
+                    // Sub-section — title is in .title div text
+                    const titleDiv = el.querySelector('.title');
+                    if (titleDiv) {
+                        currentSubSection = titleDiv.textContent.trim();
+                    } else {
+                        // Fallback: walk next siblings to find title text
+                        let sibling = el.nextElementSibling;
+                        while (sibling) {
+                            const t = sibling.querySelector && sibling.querySelector('.title');
+                            if (t) { currentSubSection = t.textContent.trim(); break; }
+                            sibling = sibling.nextElementSibling;
+                        }
+                    }
+                    console.log(`[Auto Extract]   📂 SubSection: ${currentSubSection}`);
+                }
+            } else if (dtype === 'video' && el.getAttribute('data-id')) {
                 allVideos.push({
                     id: el.getAttribute('data-id'),
                     title: el.getAttribute('data-title') || 'Unknown',
-                    section: currentSection
+                    section: currentSection,
+                    subSection: currentSubSection
                 });
             }
         });
