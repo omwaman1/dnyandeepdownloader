@@ -1,5 +1,8 @@
 (function() {
     'use strict';
+    if (window.__GRAPHY_INJECTOR_LOADED__) return;
+    window.__GRAPHY_INJECTOR_LOADED__ = true;
+    
     console.log('[Graphy Key Collector] Injector loaded...');
 
     function toHex(arr) {

@@ -1,5 +1,9 @@
 // Content script (ISOLATED world): bridges page ↔ background
 // Wrapped in try-catch to handle "Extension context invalidated" gracefully
+if (window.__GRAPHY_CONTENT_LOADED__) {
+    console.log('[Graphy Key Collector] Content script already loaded.');
+} else {
+    window.__GRAPHY_CONTENT_LOADED__ = true;
 
 window.addEventListener('message', function(event) {
     // Forward captured keys to background for storage
@@ -34,3 +38,5 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ status: 'triggered' });
     }
 });
+
+} // End of else block
