@@ -4,7 +4,12 @@
  * Downloads and decrypts HLS videos from Graphy/Spayee CDN
  * 
  * Usage:
- *   node dnyandeep_downloader.js <course_data.json>
+ *   node dnyandeep_downloader.js <course_data.json> [--h265] [--compress]
+ * 
+ * Options:
+ *   --h265      Re-encode to HEVC/H.265 (smallest files ~40-60% smaller, slowest)
+ *   --compress  Re-encode to H.264 (smaller files ~20-30% smaller, faster than H.265)
+ *   (default)   Just mux (instant, no re-encoding, original quality & size)
  * 
  * The course_data.json should contain an array of videos with:
  *   { videoId, title, keyHex, ivHex, streamUrl }
@@ -20,6 +25,11 @@ const { execSync } = require("child_process");
 const SHARED_IV = "496daa1c6914000e408c65cead91fc29";
 const CONCURRENT_DOWNLOADS = 64;
 const OUTPUT_DIR = path.join(__dirname, "..", "downloads");
+
+// Encoding mode
+const USE_H265 = process.argv.includes("--h265");
+const USE_COMPRESS = process.argv.includes("--compress");
+const ENCODE_MODE = USE_H265 ? "H.265/HEVC" : USE_COMPRESS ? "H.264 Compress" : "Copy (no re-encode)";
 
 const CDN_HEADERS = {
   accept: "*/*",
@@ -190,7 +200,7 @@ async function downloadVideo(video, index, total) {
   const safeTitle = sanitizeFilename(title);
   const safeSection = section ? sanitizeFilename(section) : "";
   const safeSubSection = (video.subSection || "") ? sanitizeFilename(video.subSection) : "";
-  
+
   // Build nested folder: downloads / section / subSection
   let outDir = OUTPUT_DIR;
   if (safeSection) outDir = path.join(outDir, safeSection);
@@ -279,11 +289,21 @@ async function downloadVideo(video, index, total) {
 function muxAsync(videoTsFile, audioTsFile, outputFile, videoId, title) {
   const { spawn } = require("child_process");
   return new Promise((resolve) => {
+    // Build ffmpeg args based on encoding mode
+    let codecArgs;
+    if (USE_H265) {
+      codecArgs = ["-c:v", "libx265", "-crf", "28", "-preset", "fast", "-tag:v", "hvc1", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"];
+    } else if (USE_COMPRESS) {
+      codecArgs = ["-c:v", "libx264", "-crf", "23", "-preset", "fast", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"];
+    } else {
+      codecArgs = ["-c", "copy"];
+    }
+
     let args;
     if (audioTsFile) {
-      args = ["-i", videoTsFile, "-i", audioTsFile, "-map", "0:v", "-map", "1:a", "-c", "copy", "-y", outputFile];
+      args = ["-i", videoTsFile, "-i", audioTsFile, "-map", "0:v", "-map", "1:a", ...codecArgs, "-y", outputFile];
     } else {
-      args = ["-i", videoTsFile, "-c", "copy", "-y", outputFile];
+      args = ["-i", videoTsFile, ...codecArgs, "-y", outputFile];
     }
 
     const proc = spawn("ffmpeg", args, { stdio: "ignore" });
@@ -307,15 +327,17 @@ function muxAsync(videoTsFile, audioTsFile, outputFile, videoId, title) {
 
 // ─── Entry Point: Pipelined download + mux ───────────────
 async function main() {
-  console.log("╔══════════════════════════════════════════════╗");
-  console.log("║     Dnyandeep Video Downloader               ║");
-  console.log("║     64-thread workers | pipelined mux         ║");
-  console.log("╚══════════════════════════════════════════════╝\n");
+  console.log("╔══════════════════════════════════════════════════╗");
+  console.log("║     Dnyandeep Video Downloader                    ║");
+  console.log("║     64-thread workers | pipelined mux              ║");
+  console.log(`║     Encode: ${ENCODE_MODE.padEnd(38)}║`);
+  console.log("╚══════════════════════════════════════════════════╝\n");
 
-  const inputFile = process.argv[2] || "videos_to_download.json";
+  // Find the JSON file arg (skip flags starting with --)
+  const inputFile = process.argv.slice(2).find(a => !a.startsWith("--")) || "videos_to_download.json";
 
   if (!fs.existsSync(inputFile)) {
-    console.log(`Usage: node dnyandeep_downloader.js <videos.json>\n`);
+    console.log(`Usage: node dnyandeep_downloader.js <videos.json> [--h265] [--compress]\n`);
     process.exit(1);
   }
 
