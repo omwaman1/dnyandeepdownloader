@@ -18,7 +18,7 @@ const { execSync } = require("child_process");
 
 // ─── Config ──────────────────────────────────────────────
 const SHARED_IV = "496daa1c6914000e408c65cead91fc29";
-const CONCURRENT_DOWNLOADS = 5;
+const CONCURRENT_DOWNLOADS = 64;
 const OUTPUT_DIR = path.join(__dirname, "..", "downloads");
 
 const CDN_HEADERS = {
@@ -109,35 +109,55 @@ function parseM3u8Variants(content) {
   return { variants, audioUri };
 }
 
-// ─── Batch Download with Concurrency ─────────────────────
+// ─── Worker Queue Download (64 workers, no idle time) ────
 async function downloadSegments(segments, baseUrl, keyHex, ivHex, segDir) {
   fs.mkdirSync(segDir, { recursive: true });
   let completed = 0;
+  let totalBytes = 0;
+  let queueIndex = 0;
+  const startTime = Date.now();
 
-  async function downloadOne(segName) {
-    const outPath = path.join(segDir, segName);
-    if (fs.existsSync(outPath)) {
+  function showProgress() {
+    const pct = Math.round((completed / segments.length) * 100);
+    const elapsed = (Date.now() - startTime) / 1000;
+    const speed = elapsed > 0 ? (totalBytes / 1024 / 1024 / elapsed).toFixed(1) : '0.0';
+    const bar = '█'.repeat(Math.floor(pct / 2.5)) + '░'.repeat(40 - Math.floor(pct / 2.5));
+    process.stdout.write(`\r    [${bar}] ${pct}% (${completed}/${segments.length}) ${speed} MB/s`);
+  }
+
+  // Each worker pulls next segment from queue immediately after finishing
+  async function worker() {
+    while (true) {
+      const idx = queueIndex++;
+      if (idx >= segments.length) break;
+
+      const segName = segments[idx];
+      const outPath = path.join(segDir, segName);
+
+      if (fs.existsSync(outPath)) {
+        totalBytes += fs.statSync(outPath).size;
+        completed++;
+        showProgress();
+        continue;
+      }
+
+      const url = baseUrl + segName;
+      const encrypted = await fetchBinary(url);
+      const decrypted = decryptSegment(encrypted, keyHex, ivHex);
+      fs.writeFileSync(outPath, decrypted);
+      totalBytes += decrypted.length;
       completed++;
-      return;
-    }
-
-    const url = baseUrl + segName;
-    const encrypted = await fetchBinary(url);
-    const decrypted = decryptSegment(encrypted, keyHex, ivHex);
-    fs.writeFileSync(outPath, decrypted);
-    completed++;
-
-    if (completed % 50 === 0 || completed === segments.length) {
-      process.stdout.write(`\r    Progress: ${completed}/${segments.length} segments`);
+      showProgress();
     }
   }
 
-  // Process in batches
-  for (let i = 0; i < segments.length; i += CONCURRENT_DOWNLOADS) {
-    const batch = segments.slice(i, i + CONCURRENT_DOWNLOADS);
-    await Promise.all(batch.map(downloadOne));
-  }
-  console.log(`\r    Progress: ${completed}/${segments.length} segments ✓`);
+  // Spawn 64 workers — each grabs next segment from queue as soon as it's free
+  const workers = Array.from({ length: CONCURRENT_DOWNLOADS }, () => worker());
+  await Promise.all(workers);
+
+  const totalMB = (totalBytes / 1024 / 1024).toFixed(1);
+  const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
+  console.log(`\r    ✅ ${segments.length} segments (${totalMB} MB) in ${totalTime}s                    `);
 }
 
 function createConcatFile(segmentNames, segDir) {
@@ -149,7 +169,7 @@ function createConcatFile(segmentNames, segDir) {
   return concatFile;
 }
 
-// ─── Main Download Function ──────────────────────────────
+// ─── Main Download Function (returns mux promise for pipelining) ──
 async function downloadVideo(video, index, total) {
   const { videoId, title, keyHex, streamUrl } = video;
   const ivHex = video.ivHex || SHARED_IV;
@@ -163,21 +183,20 @@ async function downloadVideo(video, index, total) {
 
   if (!streamUrl || !keyHex) {
     console.log("  ⚠ Skipping — missing streamUrl or keyHex");
-    return false;
+    return { status: "skipped" };
   }
 
   const safeTitle = sanitizeFilename(title);
   const safeSection = section ? sanitizeFilename(section) : "";
-  const videoDir = safeSection ? path.join(OUTPUT_DIR, safeSection) : OUTPUT_DIR;
-  fs.mkdirSync(videoDir, { recursive: true });
-  const outputFile = path.join(videoDir, `${safeTitle}.mp4`);
+  const outDir = safeSection ? path.join(OUTPUT_DIR, safeSection) : OUTPUT_DIR;
+  fs.mkdirSync(outDir, { recursive: true });
+  const outputFile = path.join(outDir, `${safeTitle}.mp4`);
 
   if (fs.existsSync(outputFile)) {
     console.log(`  ⏭ Already downloaded: ${outputFile}`);
-    return true;
+    return { status: "success" };
   }
 
-  // Extract base URL from stream URL
   const baseUrl = streamUrl.replace(/index\.m3u8$/, "");
 
   try {
@@ -199,23 +218,23 @@ async function downloadVideo(video, index, total) {
     }
     console.log(`  📦 Video segments: ${videoSegments.length}`);
 
-    // Step 3: Download video segments
+    // Step 3: Download video segments (64 parallel workers)
     const tempDir = path.join(OUTPUT_DIR, ".temp", videoId);
-    const videoDir = path.join(tempDir, "video");
+    const vidSegDir = path.join(tempDir, "video");
     console.log("  ⬇️  Downloading video...");
-    await downloadSegments(videoSegments, baseUrl, keyHex, ivHex, videoDir);
+    await downloadSegments(videoSegments, baseUrl, keyHex, ivHex, vidSegDir);
 
-    // Binary-concat video segments into single .ts
+    // Binary-concat video segments
     console.log("  🔗 Joining video segments...");
     const videoTsFile = path.join(tempDir, "video.ts");
     const videoOut = fs.createWriteStream(videoTsFile);
     for (const seg of videoSegments) {
-      videoOut.write(fs.readFileSync(path.join(videoDir, seg)));
+      videoOut.write(fs.readFileSync(path.join(vidSegDir, seg)));
     }
     videoOut.end();
     await new Promise((r) => videoOut.on("finish", r));
 
-    // Step 4: Download audio segments (if separate audio track exists)
+    // Step 4: Download audio (if separate track)
     let audioTsFile = null;
     if (audioUri) {
       console.log(`  🔊 Audio track found: ${audioUri}`);
@@ -223,16 +242,15 @@ async function downloadVideo(video, index, total) {
       const audioSegments = parseM3u8Segments(audioContent);
       console.log(`  📦 Audio segments: ${audioSegments.length}`);
 
-      const audioDir = path.join(tempDir, "audio");
+      const audioSegDir = path.join(tempDir, "audio");
       console.log("  ⬇️  Downloading audio...");
-      await downloadSegments(audioSegments, baseUrl, keyHex, ivHex, audioDir);
+      await downloadSegments(audioSegments, baseUrl, keyHex, ivHex, audioSegDir);
 
-      // Binary-concat audio segments into single .ts
       console.log("  🔗 Joining audio segments...");
       audioTsFile = path.join(tempDir, "audio.ts");
       const audioOut = fs.createWriteStream(audioTsFile);
       for (const seg of audioSegments) {
-        audioOut.write(fs.readFileSync(path.join(audioDir, seg)));
+        audioOut.write(fs.readFileSync(path.join(audioSegDir, seg)));
       }
       audioOut.end();
       await new Promise((r) => audioOut.on("finish", r));
@@ -240,76 +258,93 @@ async function downloadVideo(video, index, total) {
       console.log("  🔊 No separate audio track (audio in video stream)");
     }
 
-    // Step 5: Mux with ffmpeg
-    console.log("  🔧 Muxing with ffmpeg...");
-    if (audioTsFile) {
-      // Mux video + audio with explicit stream mapping
-      execSync(
-        `ffmpeg -i "${videoTsFile}" -i "${audioTsFile}" -map 0:v -map 1:a -c copy -y "${outputFile}"`,
-        { stdio: "ignore" }
-      );
-    } else {
-      // Video only
-      execSync(
-        `ffmpeg -i "${videoTsFile}" -c copy -y "${outputFile}"`,
-        { stdio: "ignore" }
-      );
-    }
+    // Step 5: Start mux in BACKGROUND (returns promise, doesn't block)
+    console.log("  🔧 Muxing in background...");
+    const muxPromise = muxAsync(videoTsFile, audioTsFile, outputFile, videoId, title);
+    return { status: "muxing", muxPromise };
 
-    // Step 6: Verify output
-    const stats = fs.statSync(outputFile);
-    const sizeMB = (stats.size / 1024 / 1024).toFixed(1);
-    console.log(`  ✅ Saved: ${outputFile} (${sizeMB} MB)`);
-
-    // Cleanup temp
-    fs.rmSync(path.join(OUTPUT_DIR, ".temp", videoId), { recursive: true, force: true });
-    return true;
   } catch (err) {
     console.error(`  ❌ Error: ${err.message}`);
-    return false;
+    return { status: "failed" };
   }
 }
 
-// ─── Entry Point ─────────────────────────────────────────
-async function main() {
-  console.log("╔══════════════════════════════════════════╗");
-  console.log("║     Dnyandeep Video Downloader           ║");
-  console.log("╚══════════════════════════════════════════╝\n");
+// ─── Non-blocking ffmpeg mux ─────────────────────────────
+function muxAsync(videoTsFile, audioTsFile, outputFile, videoId, title) {
+  const { spawn } = require("child_process");
+  return new Promise((resolve) => {
+    let args;
+    if (audioTsFile) {
+      args = ["-i", videoTsFile, "-i", audioTsFile, "-map", "0:v", "-map", "1:a", "-c", "copy", "-y", outputFile];
+    } else {
+      args = ["-i", videoTsFile, "-c", "copy", "-y", outputFile];
+    }
 
-  // Load video list from JSON file (arg) or default
+    const proc = spawn("ffmpeg", args, { stdio: "ignore" });
+    proc.on("close", (code) => {
+      if (code === 0 && fs.existsSync(outputFile)) {
+        const sizeMB = (fs.statSync(outputFile).size / 1024 / 1024).toFixed(1);
+        console.log(`  ✅ Muxed: ${title} (${sizeMB} MB)`);
+        fs.rmSync(path.join(OUTPUT_DIR, ".temp", videoId), { recursive: true, force: true });
+        resolve(true);
+      } else {
+        console.error(`  ❌ Mux failed: ${title}`);
+        resolve(false);
+      }
+    });
+    proc.on("error", () => {
+      console.error(`  ❌ ffmpeg not found or error: ${title}`);
+      resolve(false);
+    });
+  });
+}
+
+// ─── Entry Point: Pipelined download + mux ───────────────
+async function main() {
+  console.log("╔══════════════════════════════════════════════╗");
+  console.log("║     Dnyandeep Video Downloader               ║");
+  console.log("║     64-thread workers | pipelined mux         ║");
+  console.log("╚══════════════════════════════════════════════╝\n");
+
   const inputFile = process.argv[2] || "videos_to_download.json";
 
   if (!fs.existsSync(inputFile)) {
     console.log(`Usage: node dnyandeep_downloader.js <videos.json>\n`);
-    console.log(`Expected JSON format:`);
-    console.log(`[`);
-    console.log(`  {`);
-    console.log(`    "videoId": "abc123",`);
-    console.log(`    "title": "Video Title",`);
-    console.log(`    "keyHex": "16-byte-hex-key",`);
-    console.log(`    "streamUrl": "https://qcdn.spayee.in/.../index.m3u8"`);
-    console.log(`  }`);
-    console.log(`]`);
     process.exit(1);
   }
 
   const data = JSON.parse(fs.readFileSync(inputFile, "utf-8"));
   const videos = Array.isArray(data) ? data : data.videos || [data];
-
   console.log(`Loaded ${videos.length} video(s) from ${inputFile}`);
 
   fs.mkdirSync(OUTPUT_DIR, { recursive: true });
   fs.mkdirSync(path.join(OUTPUT_DIR, ".temp"), { recursive: true });
 
-  let success = 0;
-  let failed = 0;
-  let skipped = 0;
+  let success = 0, failed = 0, skipped = 0;
+  let pendingMux = null;
 
   for (let i = 0; i < videos.length; i++) {
     const result = await downloadVideo(videos[i], i, videos.length);
-    if (result === true) success++;
-    else if (result === false) failed++;
-    else skipped++;
+
+    if (result.status === "muxing") {
+      // Wait for PREVIOUS mux before starting next download
+      if (pendingMux) {
+        if (await pendingMux) success++; else failed++;
+      }
+      // Current mux runs in background while next video downloads
+      pendingMux = result.muxPromise;
+    } else if (result.status === "success") {
+      success++;
+    } else if (result.status === "skipped") {
+      skipped++;
+    } else {
+      failed++;
+    }
+  }
+
+  // Wait for final mux to complete
+  if (pendingMux) {
+    if (await pendingMux) success++; else failed++;
   }
 
   console.log(`\n${"═".repeat(60)}`);
