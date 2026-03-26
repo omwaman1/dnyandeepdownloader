@@ -153,9 +153,11 @@ function createConcatFile(segmentNames, segDir) {
 async function downloadVideo(video, index, total) {
   const { videoId, title, keyHex, streamUrl } = video;
   const ivHex = video.ivHex || SHARED_IV;
+  const section = video.section || "";
 
   console.log(`\n${"═".repeat(60)}`);
   console.log(`[${index + 1}/${total}] ${title}`);
+  if (section) console.log(`  📁 Section: ${section}`);
   console.log(`  ID: ${videoId}`);
   console.log(`${"═".repeat(60)}`);
 
@@ -165,7 +167,10 @@ async function downloadVideo(video, index, total) {
   }
 
   const safeTitle = sanitizeFilename(title);
-  const outputFile = path.join(OUTPUT_DIR, `${safeTitle}.mp4`);
+  const safeSection = section ? sanitizeFilename(section) : "";
+  const videoDir = safeSection ? path.join(OUTPUT_DIR, safeSection) : OUTPUT_DIR;
+  fs.mkdirSync(videoDir, { recursive: true });
+  const outputFile = path.join(videoDir, `${safeTitle}.mp4`);
 
   if (fs.existsSync(outputFile)) {
     console.log(`  ⏭ Already downloaded: ${outputFile}`);
