@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { width: 400px; font-family: 'Segoe UI', sans-serif; background: #1a1a2e; color: #eee; padding: 15px; margin: 0; }
+        h2 { color: #e94560; font-size: 16px; margin: 0 0 12px; }
+        .stats { background: #16213e; padding: 12px; border-radius: 8px; margin-bottom: 12px; text-align: center; }
+        .stats .count { font-size: 32px; font-weight: bold; color: #e94560; }
+        .stats .label { color: #a8d8ea; font-size: 13px; }
+        .btn { background: #e94560; color: white; border: none; padding: 10px 16px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; width: 100%; margin-bottom: 6px; }
+        .btn:hover { background: #c73e54; }
+        .btn.secondary { background: #0f3460; }
+        .btn.secondary:hover { background: #1a3a6e; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .key-list { max-height: 250px; overflow-y: auto; margin: 10px 0; }
+        .key-item { background: #16213e; border: 1px solid #0f3460; border-radius: 6px; padding: 8px 10px; margin-bottom: 4px; font-size: 12px; display: flex; justify-content: space-between; align-items: center; }
+        .key-item .title { color: #a8d8ea; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .key-item .key { font-family: Consolas, monospace; color: #e94560; font-size: 11px; cursor: pointer; margin-left: 8px; }
+        .key-item .key:hover { color: #ff6b81; }
+        .info { color: #666; font-size: 12px; text-align: center; padding: 10px; }
+        .toast { position: fixed; bottom: 10px; left: 50%; transform: translateX(-50%); background: #27ae60; color: white; padding: 8px 20px; border-radius: 6px; font-size: 13px; display: none; z-index: 100; }
+    </style>
+</head>
+<body>
+    <h2>🔑 Graphy Key Collector</h2>
+    
+    <div class="stats">
+        <div class="count" id="count">0</div>
+        <div class="label">keys captured</div>
+    </div>
+
+    <button class="btn" id="export">📥 Export JSON (for Downloader)</button>
+    <button class="btn secondary" id="clear">🗑️ Clear All Keys</button>
+    
+    <div class="key-list" id="keys"></div>
+    
+    <div class="info">Play videos on Graphy → keys are captured automatically.<br/>Export JSON → use with <b>dnyandeep_downloader.js</b></div>
+    
+    <div class="toast" id="toast">Copied!</div>
+
+    <script src="popup.js"></script>
+</body>
+</html>

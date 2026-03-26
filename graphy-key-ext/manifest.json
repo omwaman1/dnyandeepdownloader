@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Graphy Key Collector",
+  "version": "3.0",
+  "description": "Captures HLS decryption keys from Graphy video player and exports them as JSON",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": ["*://*.graphy.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.graphy.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}

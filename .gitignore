@@ -1,0 +1,8 @@
+node_modules/
+downloads/
+.temp/
+course_data.json
+course_page.html
+hls_custom.js
+api/auth.js
+*.log
